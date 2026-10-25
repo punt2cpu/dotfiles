@@ -1,0 +1,22 @@
+# OS & Editor temporary files
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Neovim runtime/state files (if any exist in .config/nvim)
+nvim/.config/nvim/undo/
+nvim/.config/nvim/swap/
+nvim/.config/nvim/backup/
+nvim/.config/nvim/.luarc.json
+*.log
+
+# Tmux plugin manager (if stored inside dotfiles)
+tmux/.tmux/plugins/
+tmux/.config/tmux/plugins/
+
+# Environment or secret files
+.env
+*.pem
+*.key
+*secret*
