@@ -34,7 +34,7 @@ sudo apt update && sudo apt install -y git stow tmux neovim ripgrep fd-find buil
 ## Setup
 
 ```bash
-git clone git@github.com:punt2cpu/dotfiles.git ~/dotfiles
+git clone https://github.com/punt2cpu/dotfiles.git ~/dotfiles
 cd ~/dotfiles
 mkdir -p ~/.config ~/.local/bin
 stow --no-folding -t ~ nvim tmux
