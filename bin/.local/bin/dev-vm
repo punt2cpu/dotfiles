@@ -1,22 +1,66 @@
 #!/usr/bin/env bash
-# dev-vm - Persistent High-Performance Dev VM Manager (32GB RAM, 8 vCPUs)
+# dev-vm - Persistent dev VM on libvirt/KVM (disk/RAM asked at create, 8 vCPUs)
+# VM provisioning: ~/.local/share/dev-vm/cloud-config.yaml (stowed from dotfiles)
 
 DIR="/var/lib/libvirt/images/dev"
 BASE="/var/lib/libvirt/images/sandbox/noble-base.qcow2"
+IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
 VM="dev-vm"
 URI="qemu:///system"
+TEMPLATE="${XDG_DATA_HOME:-$HOME/.local/share}/dev-vm/cloud-config.yaml"
+DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/punt2cpu/dotfiles.git}"
+DOTFILES_BRANCH="${DOTFILES_BRANCH:-main}"
+IP_TIMEOUT=120
+DISK_GB_DEFAULT=100
+MEM_GB_DEFAULT=32
+VCPUS=8
+
 PUBKEY="${HOME}/.ssh/id_ed25519.pub"
+[ -f "$PUBKEY" ] || PUBKEY="${HOME}/.ssh/id_rsa.pub"
 
-if [ ! -f "$PUBKEY" ]; then
-  PUBKEY="${HOME}/.ssh/id_rsa.pub"
-fi
+die() { echo; echo "[-] $*"; exit 1; }
 
-if [ ! -f "$PUBKEY" ]; then
-  echo "[-] Error: No SSH public key found at ~/.ssh/id_ed25519.pub or ~/.ssh/id_rsa.pub"
-  exit 1
-fi
+check-libvirt() {
+  virsh --connect "$URI" uri >/dev/null 2>&1 ||
+    die "Cannot reach libvirt at $URI (is 'libvirt' in: id -nG ?)"
+}
+
+# Prints the VM's IPv4 on stdout, progress dots on stderr
+wait-ip() {
+  local ip="" i
+  for ((i = 0; i < IP_TIMEOUT; i++)); do
+    ip=$(virsh --connect "$URI" domifaddr "$VM" 2>/dev/null | awk '/ipv4/ {split($4, a, "/"); print a[1]; exit}')
+    [ -n "$ip" ] && { echo "$ip"; return 0; }
+    echo -n "." >&2
+    sleep 1
+  done
+  return 1
+}
 
 setup-dev() {
+  [ -f "$PUBKEY" ] || die "No SSH public key at ~/.ssh/id_ed25519.pub or ~/.ssh/id_rsa.pub"
+  [ -f "$TEMPLATE" ] || die "Template not found: $TEMPLATE (stow the 'bin' package)"
+  check-libvirt
+
+  # Disk size (env DISK_GB skips the prompt)
+  local disk_gb="${DISK_GB:-}"
+  if [ -z "$disk_gb" ] && [ -t 0 ]; then
+    read -rp "[?] Disk size in GB [$DISK_GB_DEFAULT]: " disk_gb
+  fi
+  disk_gb="${disk_gb:-$DISK_GB_DEFAULT}"
+  [[ "$disk_gb" =~ ^[0-9]+$ ]] && (( disk_gb >= 10 )) ||
+    die "Disk size must be a whole number >= 10 (got: $disk_gb)"
+
+  # RAM (env MEM_GB skips the prompt)
+  local host_gb mem_gb="${MEM_GB:-}"
+  host_gb=$(awk '/MemTotal/ {printf "%d", $2/1048576}' /proc/meminfo)
+  if [ -z "$mem_gb" ] && [ -t 0 ]; then
+    read -rp "[?] RAM in GB (host has ${host_gb}) [$MEM_GB_DEFAULT]: " mem_gb
+  fi
+  mem_gb="${mem_gb:-$MEM_GB_DEFAULT}"
+  [[ "$mem_gb" =~ ^[0-9]+$ ]] && (( mem_gb >= 1 && mem_gb < host_gb )) ||
+    die "RAM must be a whole number between 1 and $((host_gb - 1)) GB (got: $mem_gb)"
+
   if [ ! -d "$DIR" ]; then
     sudo mkdir -p "$DIR"
     sudo chown "$USER:libvirt-qemu" "$DIR"
@@ -28,11 +72,12 @@ setup-dev() {
     sudo chown "$USER:libvirt-qemu" "$(dirname "$BASE")"
     if [ -f "./noble-base.qcow2" ]; then
       echo "[*] Copying existing local base image..."
-      sudo cp ./noble-base.qcow2 "$BASE"
+      cp ./noble-base.qcow2 "$BASE.part"
     else
-      echo "[*] Downloading Ubuntu 24.04 base cloud image..."
-      wget -q --show-progress -O "$BASE" https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+      echo "[*] Downloading Ubuntu 24.04 cloud image..."
+      wget -q --show-progress -O "$BASE.part" "$IMG_URL" || { rm -f "$BASE.part"; die "Download failed"; }
     fi
+    mv "$BASE.part" "$BASE"
     sudo chown "$USER:libvirt-qemu" "$BASE"
     chmod 444 "$BASE"
   fi
@@ -40,38 +85,23 @@ setup-dev() {
   virsh --connect "$URI" destroy "$VM" &>/dev/null
   virsh --connect "$URI" undefine "$VM" --nvram &>/dev/null
 
-  echo "[*] Creating cloud-init config with your host SSH key..."
-  cat <<CONFIG > "$DIR/dev-user-data.yaml"
-#cloud-config
-hostname: dev-vm
-users:
-  - name: dev
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
-    ssh_authorized_keys:
-      - $(cat "$PUBKEY")
-package_update: true
-packages:
-  - build-essential
-  - git
-  - tmux
-  - neovim
-  - curl
-  - htop
-  - valgrind
-CONFIG
-  cloud-localds "$DIR/dev-seed.iso" "$DIR/dev-user-data.yaml"
+  echo "[*] Rendering cloud-init config (dotfiles: $DOTFILES_REPO @ $DOTFILES_BRANCH)..."
+  sed -e "s|@PUBKEY@|$(cat "$PUBKEY")|" \
+      -e "s|@DOTFILES_REPO@|$DOTFILES_REPO|" \
+      -e "s|@DOTFILES_BRANCH@|$DOTFILES_BRANCH|" \
+      "$TEMPLATE" > "$DIR/dev-user-data.yaml"
+  cloud-localds "$DIR/dev-seed.iso" "$DIR/dev-user-data.yaml" || die "cloud-localds failed (package: cloud-image-utils)"
 
-  echo "[*] Creating 100GB persistent CoW disk..."
+  echo "[*] Creating ${disk_gb}GB persistent CoW disk..."
   rm -f "$DIR/dev-disk.qcow2"
-  qemu-img create -f qcow2 -F qcow2 -b "$BASE" "$DIR/dev-disk.qcow2" 100G >/dev/null
+  qemu-img create -f qcow2 -F qcow2 -b "$BASE" "$DIR/dev-disk.qcow2" "${disk_gb}G" >/dev/null || die "qemu-img failed"
 
-  echo "[*] Launching $VM with 32GB RAM and 8 vCPUs on $URI..."
+  echo "[*] Launching $VM with ${mem_gb}GB RAM and $VCPUS vCPUs on $URI..."
   virt-install \
     --connect "$URI" \
     --name "$VM" \
-    --memory 32768 \
-    --vcpus 8 \
+    --memory $((mem_gb * 1024)) \
+    --vcpus "$VCPUS" \
     --cpu host-passthrough \
     --disk path="$DIR/dev-disk.qcow2",format=qcow2,bus=virtio \
     --disk path="$DIR/dev-seed.iso",device=cdrom \
@@ -79,36 +109,33 @@ CONFIG
     --network network=default,model=virtio \
     --graphics none \
     --noautoconsole \
-    --import >/dev/null
+    --import >/dev/null || die "virt-install failed"
 
   echo -n "[*] Waiting for $VM to boot and acquire IP"
-  local IP=""
-  while [ -z "$IP" ]; do
-    sleep 1
-    echo -n "."
-    IP=$(virsh --connect "$URI" domifaddr "$VM" 2>/dev/null | awk '/ipv4/ {split($4, a, "/"); print a[1]}')
-  done
-  echo -e "\n[+] $VM is live at $IP!"
-  echo "[+] Connect anytime with: dev-vm shell"
+  local ip
+  ip=$(wait-ip) || die "No IP after ${IP_TIMEOUT}s (check: virsh console $VM)"
+  echo -e "\n[+] $VM is live at $ip"
+  echo "[+] Provisioning (packages, Neovim, dotfiles) runs inside the VM for a few minutes."
+  echo "[+] Connect: dev-vm shell    Progress inside VM: cloud-init status --wait"
 }
 
 start-dev() {
+  check-libvirt
+  echo -n "[*] Starting $VM"
   virsh --connect "$URI" start "$VM" &>/dev/null
-  echo "[*] Starting $VM..."
-  local IP=""
-  while [ -z "$IP" ]; do
-    sleep 1
-    IP=$(virsh --connect "$URI" domifaddr "$VM" 2>/dev/null | awk '/ipv4/ {split($4, a, "/"); print a[1]}')
-  done
-  echo "[+] $VM is running at $IP"
+  local ip
+  ip=$(wait-ip) || die "No IP after ${IP_TIMEOUT}s"
+  echo -e "\n[+] $VM is running at $ip"
 }
 
 stop-dev() {
+  check-libvirt
   echo "[*] Shutting down $VM gracefully..."
   virsh --connect "$URI" shutdown "$VM"
 }
 
 destroy-dev() {
+  check-libvirt
   echo "[*] Forcefully stopping and removing $VM..."
   virsh --connect "$URI" destroy "$VM" &>/dev/null
   virsh --connect "$URI" undefine "$VM" --nvram &>/dev/null
@@ -117,24 +144,18 @@ destroy-dev() {
 }
 
 shell-dev() {
-  if ! virsh --connect "$URI" domstate "$VM" 2>/dev/null | grep -q "running"; then
-    start-dev
-  fi
-  local IP=""
-  while [ -z "$IP" ]; do
-    sleep 0.5
-    IP=$(virsh --connect "$URI" domifaddr "$VM" 2>/dev/null | awk '/ipv4/ {split($4, a, "/"); print a[1]}')
-  done
-  ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null dev@$IP
+  check-libvirt
+  virsh --connect "$URI" domstate "$VM" 2>/dev/null | grep -q running || start-dev
+  local ip
+  ip=$(wait-ip) || die "No IP after ${IP_TIMEOUT}s"
+  ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "dev@$ip"
 }
 
 case "$1" in
-  create) setup-dev ;;
-  start) start-dev ;;
-  stop) stop-dev ;;
+  create)  setup-dev ;;
+  start)   start-dev ;;
+  stop)    stop-dev ;;
   destroy) destroy-dev ;;
-  shell) shell-dev ;;
-  *)
-    echo "Usage: dev-vm [create | start | stop | destroy | shell]"
-    ;;
+  shell)   shell-dev ;;
+  *)       echo "Usage: dev-vm [create | start | stop | destroy | shell]" ;;
 esac

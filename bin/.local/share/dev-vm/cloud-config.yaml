@@ -1,0 +1,36 @@
+#cloud-config
+# Template for dev-vm. Placeholders are filled in at "dev-vm create".
+hostname: dev-vm
+users:
+  - name: dev
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - "@PUBKEY@"
+package_update: true
+packages:
+  - build-essential
+  - git
+  - stow
+  - tmux
+  - ripgrep
+  - fd-find
+  - clangd
+  - curl
+  - unzip
+  - htop
+  - valgrind
+runcmd:
+  - |
+    curl -fsSL https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz -o /tmp/nvim.tar.gz
+    mkdir -p /opt/nvim
+    tar -C /opt/nvim --strip-components=1 -xzf /tmp/nvim.tar.gz
+    ln -sf /opt/nvim/bin/nvim /usr/local/bin/nvim
+    rm -f /tmp/nvim.tar.gz
+  - |
+    sudo -iu dev bash -c '
+      git clone -b @DOTFILES_BRANCH@ @DOTFILES_REPO@ ~/dotfiles &&
+      mkdir -p ~/.config ~/.local/bin &&
+      ln -sf "$(command -v fdfind)" ~/.local/bin/fd &&
+      cd ~/dotfiles && stow --no-folding -t ~ nvim tmux
+    '
