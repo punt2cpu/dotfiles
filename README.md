@@ -1,11 +1,13 @@
 # dotfiles
 
-Personal Neovim and tmux config, managed with GNU Stow.
+Personal Neovim and tmux config plus a dev VM script, managed with GNU Stow.
 
 ## Structure
 
-```text
+```
 ~/dotfiles/
+├── bin/
+│   └── .local/bin/dev-vm              # libvirt/KVM dev VM manager
 ├── nvim/
 │   └── .config/nvim/                  # LazyVim + clangd C/C++ setup
 └── tmux/
@@ -24,6 +26,12 @@ Personal Neovim and tmux config, managed with GNU Stow.
 - `escape-time 0`, 50k scrollback, 1-indexed windows/panes, mouse enabled.
 - Splits on `Prefix + |` and `Prefix + -`, Vim pane navigation (`Prefix + h/j/k/l`).
 - `tmux-telemetry.sh`: polls `/proc` and `/sys/class/hwmon` every 3s for CPU (`k10temp`), RAM, AMD GPU (`amdgpu`), and RX/TX throughput. State is kept in `/dev/shm` so it doesn't touch the disk.
+
+**dev-vm**
+- Ubuntu 24.04 VM on libvirt/KVM: 8 vCPU, 32 GB RAM, 100 GB thin disk on top of a read-only cloud image.
+- Adds your SSH public key via cloud-init. User `dev` has passwordless sudo.
+- `dev-vm create | start | stop | destroy | shell`
+- Uses sudo to create `/var/lib/libvirt/images/{dev,sandbox}`. Needs your user in the `libvirt` group.
 
 ## Fresh Setup (Debian / Ubuntu)
 
@@ -45,5 +53,14 @@ git clone https://github.com/punt2cpu/dotfiles.git ~/dotfiles && \
 cd ~/dotfiles && \
 mkdir -p ~/.config ~/.local/bin && \
 ln -sf "$(which fdfind)" ~/.local/bin/fd && \
-stow --no-folding -t ~ nvim tmux
+stow --no-folding -t ~ nvim tmux bin
 ```
+
+3. Optional, only on hosts that run `dev-vm`:
+
+```bash
+sudo apt install -y qemu-system-x86 libvirt-daemon-system libvirt-clients virtinst qemu-utils cloud-image-utils wget && \
+sudo usermod -aG libvirt,kvm "$USER"
+```
+
+Log out and back in for the group change.

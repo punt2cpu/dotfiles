@@ -20,3 +20,12 @@ tmux/.config/tmux/plugins/
 *.pem
 *.key
 *secret*
+*.qcow2
+*.iso
+*.img
+*user-data.yaml
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+

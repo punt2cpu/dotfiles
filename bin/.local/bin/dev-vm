@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# dev-vm - Persistent High-Performance Dev VM Manager (32GB RAM, 8 vCPUs)
+
+DIR="/var/lib/libvirt/images/dev"
+BASE="/var/lib/libvirt/images/sandbox/noble-base.qcow2"
+VM="dev-vm"
+URI="qemu:///system"
+PUBKEY="${HOME}/.ssh/id_ed25519.pub"
+
+if [ ! -f "$PUBKEY" ]; then
+  PUBKEY="${HOME}/.ssh/id_rsa.pub"
+fi
+
+if [ ! -f "$PUBKEY" ]; then
+  echo "[-] Error: No SSH public key found at ~/.ssh/id_ed25519.pub or ~/.ssh/id_rsa.pub"
+  exit 1
+fi
+
+setup-dev() {
+  if [ ! -d "$DIR" ]; then
+    sudo mkdir -p "$DIR"
+    sudo chown "$USER:libvirt-qemu" "$DIR"
+    sudo chmod 775 "$DIR"
+  fi
+
+  if [ ! -f "$BASE" ]; then
+    sudo mkdir -p "$(dirname "$BASE")"
+    sudo chown "$USER:libvirt-qemu" "$(dirname "$BASE")"
+    if [ -f "./noble-base.qcow2" ]; then
+      echo "[*] Copying existing local base image..."
+      sudo cp ./noble-base.qcow2 "$BASE"
+    else
+      echo "[*] Downloading Ubuntu 24.04 base cloud image..."
+      wget -q --show-progress -O "$BASE" https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+    fi
+    sudo chown "$USER:libvirt-qemu" "$BASE"
+    chmod 444 "$BASE"
+  fi
+
+  virsh --connect "$URI" destroy "$VM" &>/dev/null
+  virsh --connect "$URI" undefine "$VM" --nvram &>/dev/null
+
+  echo "[*] Creating cloud-init config with your host SSH key..."
+  cat <<CONFIG > "$DIR/dev-user-data.yaml"
+#cloud-config
+hostname: dev-vm
+users:
+  - name: dev
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - $(cat "$PUBKEY")
+package_update: true
+packages:
+  - build-essential
+  - git
+  - tmux
+  - neovim
+  - curl
+  - htop
+  - valgrind
+CONFIG
+  cloud-localds "$DIR/dev-seed.iso" "$DIR/dev-user-data.yaml"
+
+  echo "[*] Creating 100GB persistent CoW disk..."
+  rm -f "$DIR/dev-disk.qcow2"
+  qemu-img create -f qcow2 -F qcow2 -b "$BASE" "$DIR/dev-disk.qcow2" 100G >/dev/null
+
+  echo "[*] Launching $VM with 32GB RAM and 8 vCPUs on $URI..."
+  virt-install \
+    --connect "$URI" \
+    --name "$VM" \
+    --memory 32768 \
+    --vcpus 8 \
+    --cpu host-passthrough \
+    --disk path="$DIR/dev-disk.qcow2",format=qcow2,bus=virtio \
+    --disk path="$DIR/dev-seed.iso",device=cdrom \
+    --os-variant ubuntu24.04 \
+    --network network=default,model=virtio \
+    --graphics none \
+    --noautoconsole \
+    --import >/dev/null
+
+  echo -n "[*] Waiting for $VM to boot and acquire IP"
+  local IP=""
+  while [ -z "$IP" ]; do
+    sleep 1
+    echo -n "."
+    IP=$(virsh --connect "$URI" domifaddr "$VM" 2>/dev/null | awk '/ipv4/ {split($4, a, "/"); print a[1]}')
+  done
+  echo -e "\n[+] $VM is live at $IP!"
+  echo "[+] Connect anytime with: dev-vm shell"
+}
+
+start-dev() {
+  virsh --connect "$URI" start "$VM" &>/dev/null
+  echo "[*] Starting $VM..."
+  local IP=""
+  while [ -z "$IP" ]; do
+    sleep 1
+    IP=$(virsh --connect "$URI" domifaddr "$VM" 2>/dev/null | awk '/ipv4/ {split($4, a, "/"); print a[1]}')
+  done
+  echo "[+] $VM is running at $IP"
+}
+
+stop-dev() {
+  echo "[*] Shutting down $VM gracefully..."
+  virsh --connect "$URI" shutdown "$VM"
+}
+
+destroy-dev() {
+  echo "[*] Forcefully stopping and removing $VM..."
+  virsh --connect "$URI" destroy "$VM" &>/dev/null
+  virsh --connect "$URI" undefine "$VM" --nvram &>/dev/null
+  rm -f "$DIR/dev-disk.qcow2" "$DIR/dev-seed.iso" "$DIR/dev-user-data.yaml"
+  echo "[-] $VM undefined and disk deleted."
+}
+
+shell-dev() {
+  if ! virsh --connect "$URI" domstate "$VM" 2>/dev/null | grep -q "running"; then
+    start-dev
+  fi
+  local IP=""
+  while [ -z "$IP" ]; do
+    sleep 0.5
+    IP=$(virsh --connect "$URI" domifaddr "$VM" 2>/dev/null | awk '/ipv4/ {split($4, a, "/"); print a[1]}')
+  done
+  ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null dev@$IP
+}
+
+case "$1" in
+  create) setup-dev ;;
+  start) start-dev ;;
+  stop) stop-dev ;;
+  destroy) destroy-dev ;;
+  shell) shell-dev ;;
+  *)
+    echo "Usage: dev-vm [create | start | stop | destroy | shell]"
+    ;;
+esac
