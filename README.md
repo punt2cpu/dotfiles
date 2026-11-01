@@ -33,7 +33,7 @@ Personal Neovim and tmux config plus a dev VM script, managed with GNU Stow.
 - Ubuntu 24.04 VM on libvirt/KVM: 8 vCPU, thin qcow2 disk on top of a read-only cloud image. Disk size and RAM are asked at create (defaults 100 GB / 32 GB); non-interactive: `DISK_GB=200 MEM_GB=16 dev-vm create`.
 - Adds your SSH public key via cloud-init. User `dev` has passwordless sudo.
 - `dev-vm create | start | stop | destroy | shell`
-- On first boot the VM installs packages and the latest Neovim, clones this repo as user `dev` and stows `nvim tmux` (see `cloud-config.yaml`). `DOTFILES_REPO` and `DOTFILES_BRANCH` override the source, e.g. `DOTFILES_BRANCH=test dev-vm create`.
+- On first boot the VM installs packages and the latest Neovim, clones this repo as user `dev` and stows `nvim tmux bin` and runs `sec-setup` (see `cloud-config.yaml`). `DOTFILES_REPO` and `DOTFILES_BRANCH` override the source, e.g. `DOTFILES_BRANCH=test dev-vm create`.
 - Uses sudo to create `/var/lib/libvirt/images/{dev,sandbox}`. Needs your user in the `libvirt` group.
 
 **sec-setup**

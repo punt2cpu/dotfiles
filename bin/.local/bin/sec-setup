@@ -11,8 +11,8 @@ AIDE_CONF=/etc/aide/local.conf
 AIDE_DB=/var/lib/aide-local/aide.db.gz
 
 echo "[+] packages"
-apt-get install -y -qq --no-install-recommends aide auditd >/dev/null
-install -d -m 0755 "$S" /var/lib/aide-local /var/log/aide-local
+apt-get -o DPkg::Lock::Timeout=600 install -y -qq --no-install-recommends aide auditd >/dev/null
+install -d -m 0755 "$S" /etc/aide /var/lib/aide-local /var/log/aide-local
 # mute alert collector during setup
 echo 9999999999 >"$S/audit.last"
 trap 'date +%s >"$S/audit.last"' EXIT

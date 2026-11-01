@@ -32,5 +32,6 @@ runcmd:
       git clone -b @DOTFILES_BRANCH@ @DOTFILES_REPO@ ~/dotfiles &&
       mkdir -p ~/.config ~/.local/bin &&
       ln -sf "$(command -v fdfind)" ~/.local/bin/fd &&
-      cd ~/dotfiles && stow --no-folding -t ~ nvim tmux
+      cd ~/dotfiles && stow --no-folding -t ~ nvim tmux bin &&
+      ~/.local/bin/sec-setup
     '
