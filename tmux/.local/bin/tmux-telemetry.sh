@@ -23,11 +23,25 @@ done
 # 4. Network Bytes
 read -r rx_now tx_now <<<"$(awk 'NR>2 && $1 !~ /^lo:/ {rx+=$2; tx+=$10} END {print rx, tx}' /proc/net/dev)"
 
+# 4b. Disk of / (through LUKS/LVM), override with: tmux set-environment -g TMUX_DISK nvme0n1
+DISK_FILE="/dev/shm/tmux_disk_${USER}"
+disk="${TMUX_DISK:-}"
+if [[ -z "$disk" ]]; then
+  [[ -s "$DISK_FILE" ]] || lsblk -lsno NAME,TYPE "$(findmnt -no SOURCE /)" 2>/dev/null |
+    awk '$2=="disk" {print $1; exit}' >"$DISK_FILE"
+  disk=$(<"$DISK_FILE")
+fi
+read -r d_rd d_wr d_io <<<"$(awk -v d="$disk" '$3==d {print $6, $10, $13}' /proc/diskstats)"
+d_rd=${d_rd:-0} d_wr=${d_wr:-0} d_io=${d_io:-0}
+
 cpu_pct=0
 rx_rate=0
 tx_rate=0
+d_util=0
+d_rd_rate=0
+d_wr_rate=0
 if [[ -f "$STATE_FILE" ]]; then
-  read -r prev_time prev_cpu_total prev_cpu_idle prev_rx prev_tx <"$STATE_FILE"
+  read -r prev_time prev_cpu_total prev_cpu_idle prev_rx prev_tx prev_d_rd prev_d_wr prev_d_io <"$STATE_FILE"
   dt=$((NOW - prev_time))
   dt_cpu=$((cpu_total - prev_cpu_total))
   if ((dt_cpu > 0)); then
@@ -36,10 +50,14 @@ if [[ -f "$STATE_FILE" ]]; then
   if ((dt > 0)); then
     rx_rate=$(((rx_now - prev_rx) / dt))
     tx_rate=$(((tx_now - prev_tx) / dt))
+    d_util=$(((d_io - prev_d_io) / (dt * 10)))
+    ((d_util > 100)) && d_util=100
+    d_rd_rate=$(((d_rd - prev_d_rd) * 512 / dt))
+    d_wr_rate=$(((d_wr - prev_d_wr) * 512 / dt))
   fi
 fi
 
-echo "$NOW $cpu_total $cpu_idle $rx_now $tx_now" >"$STATE_FILE"
+echo "$NOW $cpu_total $cpu_idle $rx_now $tx_now $d_rd $d_wr $d_io" >"$STATE_FILE"
 
 fmt_net() {
   if (($1 >= 1048576)); then
@@ -90,18 +108,34 @@ if [[ -n "$gpu_hwmon" ]]; then
   fi
 fi
 
+# 5b. Security state from sec-setup (segment hidden on hosts without it)
+sec_str=""
+if [[ -r /var/lib/sec-status/aide ]]; then
+  aide_state=$(cut -d' ' -f1 /var/lib/sec-status/aide)
+  audit_n=$(wc -l 2>/dev/null </var/lib/sec-status/audit.alerts || echo 0)
+  if [[ "$aide_state" == "ok" && "$audit_n" == "0" ]]; then
+    sec_str="SEC: ok | "
+  else
+    sec_str="#[fg=white,bg=red,bold] SEC: AIDE ${aide_state}, ${audit_n} audit #[default] | "
+  fi
+fi
+
 # 6. Assemble Output
-cpu_str="CPU: ${cpu_pct}%"
+cpu_str="C: ${cpu_pct}%"
 [[ -n "$cpu_temp" ]] && cpu_str="${cpu_str} ${cpu_temp}"
 cpu_str="${cpu_str} (${load_avg})"
 
-gpu_str="GPU: ${gpu_load}"
+gpu_str="G: ${gpu_load}"
 [[ -n "$gpu_temp" ]] && gpu_str="${gpu_str} ${gpu_temp}"
 [[ -n "$gpu_vram" ]] && gpu_str="${gpu_str} [${gpu_vram}]"
 
-printf "%s | MEM: %s | %s | NET: ↓%s ↑%s" \
+disk_str="D: ${d_util}% R$(fmt_net $d_rd_rate) W$(fmt_net $d_wr_rate)"
+
+printf "%s%s | M: %s | %s | %s | N: ↓%s ↑%s" \
+  "$sec_str" \
   "$cpu_str" \
   "$mem_info" \
+  "$disk_str" \
   "$gpu_str" \
   "$(fmt_net $rx_rate)" \
   "$(fmt_net $tx_rate)"
