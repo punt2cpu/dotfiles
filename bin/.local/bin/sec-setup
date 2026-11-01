@@ -15,6 +15,7 @@ apt-get install -y -qq --no-install-recommends aide auditd >/dev/null
 install -d -m 0755 "$S" /var/lib/aide-local /var/log/aide-local
 # mute alert collector during setup
 echo 9999999999 >"$S/audit.last"
+trap 'date +%s >"$S/audit.last"' EXIT
 
 # ---------------------------------------------------------------- AIDE
 echo "[+] AIDE config"
@@ -222,7 +223,6 @@ systemctl enable --now auditd aide-check.timer sec-status.timer >/dev/null
 }
 
 augenrules --load >/dev/null
-date +%s >"$S/audit.last"
 
 echo "[+] done"
 echo "    AIDE CHANGED: sudo less \$(cut -d' ' -f3 $S/aide)  then  sudo aide-accept"
