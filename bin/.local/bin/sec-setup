@@ -26,8 +26,10 @@ gzip_dbout=yes
 report_url=stdout
 
 SYS = p+i+n+u+g+s+m+c+sha256
+EFI = SYS-i
 
 /boot          SYS
+/boot/efi      EFI
 /etc           SYS
 /usr/bin       SYS
 /usr/sbin      SYS
@@ -43,6 +45,8 @@ $H/.config/systemd/user  SYS
 !/etc/adjtime
 !/etc/cups
 !/etc/.*~
+!/boot/grub/grubenv
+!/etc/apparmor.d/libvirt/libvirt-.*
 EOF
 
 systemctl disable --now dailyaidecheck.timer >/dev/null 2>&1 || true
