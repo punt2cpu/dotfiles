@@ -39,7 +39,7 @@ Personal Neovim and tmux config plus a dev VM script, managed with GNU Stow.
 **sec-setup**
 - Scoped AIDE (`/boot`, `/etc`, `/usr` binaries/libs, SSH keys, autostart; sha256 only) with a daily timer, replacing Ubuntu's default config.
 - Targeted auditd rules: Firefox profile (extension storage, cookies, logins, extensions) read by anything other than Firefox, accounts/sudo/sshd changes, persistence paths.
-- `sudo aide-accept` re-baselines AIDE after reviewing changes, `sudo sec-ack` shows and clears audit alerts. Re-run `sec-setup` after creating a Firefox profile.
+- `sudo aide-accept` re-baselines AIDE after reviewing changes, `sec-show` lists pending audit alerts with file and program, `sudo sec-ack` clears them. Re-run `sec-setup` after creating a Firefox profile.
 
 ## Fresh Setup (Debian / Ubuntu)
 

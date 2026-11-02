@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# details for pending audit alerts
+[ "$EUID" -eq 0 ] || exec sudo "$0" "$@"
+A=/var/lib/sec-status/audit.alerts
+FF='^(/snap/firefox/[0-9]+/usr/lib/firefox/|/usr/lib/firefox/)'
+[ -s "$A" ] || { echo "no pending audit alerts"; exit 0; }
+read -r d t _ <"$A"
+since=$(date -d "$d $t" '+%x %T')
+
+{
+  echo "COUNT|LAST|KEY|ACTION|FILE|PROGRAM"
+  for k in $(awk '{print $3}' "$A" | sort -u); do
+    ausearch -k "$k" -ts $since --format csv --extra-keys 2>/dev/null | tail -n +2
+  done | while IFS=, read -r _ _ dt tm sn _ _ _ _ _ act res obj _ _ how key; do
+    [ "$key" = browser ] && [[ $how =~ $FF ]] && continue
+    [ "$res" = success ] || act="$act($res)"
+    [ -n "$obj" ] || obj=$(ausearch -a "$sn" --raw 2>/dev/null |
+      grep -o 'name="[^"]*[^/]"' | cut -d'"' -f2 | paste -sd' ')
+    echo "$dt $tm|$key|$act|${obj:--}|$how"
+  done | sort | awk -F'|' '{k=$2"|"$3"|"$4"|"$5; n[k]++; l[k]=$1} END {for (k in n) print n[k]"|"l[k]"|"k}' | sort -t'|' -k2
+} | awk -F'|' '{for (i=1;i<=NF;i++) {c[NR,i]=$i; if (length($i)>w[i]) w[i]=length($i)}}
+  END {for (r=1;r<=NR;r++) {for (i=1;i<6;i++) printf "%-*s  ", w[i], c[r,i]; print c[r,6]}}'
